@@ -1,196 +1,168 @@
 <?php
-include_once '../config/db.php';
-
-// Lấy ID sản phẩm cần chỉnh sửa
-$id = $_GET['id'];
-
-// Lấy thông tin sản phẩm từ cơ sở dữ liệu
-$sql = "SELECT * FROM san_pham WHERE id = $id";
-$result = $conn->query($sql);
-$product = $result->fetch_assoc();
-
-// Lấy thông tin hình ảnh của sản phẩm
-$sql_images = "SELECT * FROM hinh_anh_san_pham WHERE san_pham_id = $id";
-$result_images = $conn->query($sql_images);
-
-// Cập nhật thông tin sản phẩm khi form được gửi
+include '../config/db.php';
+include '../header.php';
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    $ten_san_pham = $_POST['ten_san_pham'];
-    $gia = $_POST['gia'];
-    $so_luong = $_POST['so_luong'];
-    $loai_id = $_POST['loai_id'];
-    $mo_ta = $_POST['mo_ta'];
+    $tieu_de = $_POST['tieu_de'];
+    $slug = $_POST['slug'];
+    $noi_dung = $_POST['noi_dung'];
+    $thumbnail = $_POST['thumbnail'];
+    $loai_bai_viet = $_POST['loai_bai_viet'];
+    $hien_thi = $_POST['hien_thi'];
+    $tac_gia_admin_id = $_POST['tac_gia_admin_id'];
 
-    // Cập nhật sản phẩm vào bảng san_pham
-    $sql_update = "UPDATE san_pham SET 
-                    ten_san_pham = '$ten_san_pham',
-                    gia = '$gia',
-                    so_luong = '$so_luong',
-                    loai_id = '$loai_id',
-                    mo_ta = '$mo_ta'
-                   WHERE id = $id";
-    $conn->query($sql_update);
+    $hinh_anh = $_FILES['hinh_anh'];
+    $thu_tu_hinh_anh = $_POST['thu_tu_hinh_anh'];
+    $doan_noi_dung = $_POST['doan_noi_dung'];
+    $thu_tu_noi_dung = $_POST['thu_tu_noi_dung'];
 
-    // Xử lý hình ảnh (cho phép nhiều file)
-    if (isset($_FILES['hinh_anh']['name'])) {
-        $total_files = count($_FILES['hinh_anh']['name']);
-        for ($i = 0; $i < $total_files; $i++) {
-            $target_dir = "images/";  // Thư mục lưu trữ ảnh
-            $target_file = $target_dir . basename($_FILES["hinh_anh"]["name"][$i]);
+    $conn->begin_transaction();
 
-            // Kiểm tra xem tệp có phải là ảnh và có thể tải lên không
-            if (move_uploaded_file($_FILES["hinh_anh"]["tmp_name"][$i], $target_file)) {
-                // Lấy mô tả ngắn cho hình ảnh
-                $mo_ta_ngan_gon = isset($_POST['mo_ta_hinh'][$i]) ? $_POST['mo_ta_hinh'][$i] : '';
+    try {
+        $sql_bai_viet = "INSERT INTO bai_viet (tieu_de, slug, noi_dung, thumbnail, loai_bai_viet, hien_thi, ngay_dang, tac_gia_admin_id)
+                         VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)";
+        $stmt = $conn->prepare($sql_bai_viet);
+        $stmt->bind_param("ssssssi", $tieu_de, $slug, $noi_dung, $thumbnail, $loai_bai_viet, $hien_thi, $tac_gia_admin_id);
+        $stmt->execute();
+        $bai_viet_id = $stmt->insert_id;
 
-                // Thêm hình ảnh vào bảng hinh_anh_san_pham và liên kết với sản phẩm
-                $sql_image = "INSERT INTO hinh_anh_san_pham (san_pham_id, ten_file, mo_ta_ngan) 
-                              VALUES ($id, '$target_file', '$mo_ta_ngan_gon')";
-                $conn->query($sql_image);
+        foreach ($doan_noi_dung as $index => $noidung) {
+            $thu_tu = isset($thu_tu_noi_dung[$index]) ? $thu_tu_noi_dung[$index] : $index;
+            $sql_nd = "INSERT INTO bai_viet_chi_tiet (bai_viet_id, loai, noidung_hoac_hinh, thu_tu)
+                       VALUES (?, 'noi_dung', ?, ?)";
+            $stmt = $conn->prepare($sql_nd);
+            $stmt->bind_param("isi", $bai_viet_id, $noidung, $thu_tu);
+            $stmt->execute();
+        }
+
+        $target_dir = "../images/";
+        if (!file_exists($target_dir)) mkdir($target_dir, 0777, true);
+
+        foreach ($hinh_anh['name'] as $index => $name) {
+            if ($hinh_anh['error'][$index] === UPLOAD_ERR_OK) {
+                $tmp_name = $hinh_anh["tmp_name"][$index];
+                $image_name = basename($name);
+                $target_file = $target_dir . $image_name;
+
+                if (move_uploaded_file($tmp_name, $target_file)) {
+                    $thu_tu = isset($thu_tu_hinh_anh[$index]) ? $thu_tu_hinh_anh[$index] : $index;
+                    $sql_anh = "INSERT INTO bai_viet_chi_tiet (bai_viet_id, loai, noidung_hoac_hinh, thu_tu)
+                                VALUES (?, 'hinh_anh', ?, ?)";
+                    $stmt = $conn->prepare($sql_anh);
+                    $stmt->bind_param("isi", $bai_viet_id, $image_name, $thu_tu);
+                    $stmt->execute();
+                } else {
+                    throw new Exception("Không thể upload ảnh $image_name.");
+                }
             }
         }
-    }
 
-    // Cập nhật mô tả hình ảnh đã có
-    if (isset($_POST['mo_ta_hinh_old'])) {
-        $mo_ta_hinh_old = $_POST['mo_ta_hinh_old'];
-        foreach ($mo_ta_hinh_old as $image_id => $mo_ta) {
-            $sql_update_image = "UPDATE hinh_anh_san_pham SET mo_ta_ngan_gon = '$mo_ta' WHERE id = $image_id";
-            $conn->query($sql_update_image);
-        }
+        $conn->commit();
+        echo "<script>alert('Thêm tin tức thành công!'); window.location.href='index.php';</script>";
+    } catch (Exception $e) {
+        $conn->rollback();
+        echo "Lỗi: " . $e->getMessage();
     }
-
-    // Quay lại danh sách sản phẩm
-    header('Location: index.php');
-    exit();
 }
 
-// Xóa hình ảnh
-if (isset($_GET['delete_image_id'])) {
-    $delete_image_id = $_GET['delete_image_id'];
-    $sql_delete_image = "DELETE FROM hinh_anh_san_pham WHERE id = $delete_image_id";
-    $conn->query($sql_delete_image);
-    header("Location: edit.php?id=$id");
-    exit();
-}
+// Load tác giả (admin)
+$admin_sql = "SELECT * FROM quan_tri_vien";
+$admin_result = $conn->query($admin_sql);
+$loai_bai_viet_list = ['tin_tuc' => 'Tin tức', 'video' => 'Video'];
 ?>
-
 <!DOCTYPE html>
 <html lang="vi">
 
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Sửa sản phẩm</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
-    <style>
-    .image-group {
-        margin-bottom: 15px;
-    }
+    <meta charset="UTF-8">
+    <title>Thêm Tin Tức</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script>
+    function addField(fieldType) {
+        let container = document.getElementById(fieldType + 'Fields');
+        let field;
+        let orderInput = document.createElement('input');
+        orderInput.className = 'form-control mb-2';
+        orderInput.setAttribute('name', fieldType === 'image' ? 'thu_tu_hinh_anh[]' : 'thu_tu_noi_dung[]');
+        orderInput.setAttribute('placeholder', 'Thứ tự hiển thị');
 
-    .image-group input[type="file"] {
-        display: inline-block;
+        if (fieldType === 'image') {
+            field = document.createElement('input');
+            field.setAttribute('type', 'file');
+            field.setAttribute('name', 'hinh_anh[]');
+        } else {
+            field = document.createElement('textarea');
+            field.setAttribute('name', 'doan_noi_dung[]');
+            field.rows = 4;
+        }
+        field.className = 'form-control mb-2';
+
+        let removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'btn btn-danger mb-3';
+        removeBtn.innerText = 'Xoá';
+        removeBtn.onclick = function() {
+            container.removeChild(wrapper);
+        };
+
+        let wrapper = document.createElement('div');
+        wrapper.appendChild(field);
+        wrapper.appendChild(orderInput);
+        wrapper.appendChild(removeBtn);
+
+        container.appendChild(wrapper);
     }
-    </style>
+    </script>
 </head>
 
 <body>
-    <!-- Navbar -->
-    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
-        <div class="container">
-            <a class="navbar-brand" href="../index.php">Điện thoại Shop</a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
-                aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav ms-auto">
-                    <li class="nav-item"><a class="nav-link" href="index.php">Danh sách sản phẩm</a></li>
-                    <li class="nav-item"><a class="nav-link" href="../logout.php">Đăng xuất</a></li>
-                </ul>
+    <div class="container mt-4">
+        <h3>Thêm bài viết mới</h3>
+        <form method="POST" enctype="multipart/form-data">
+            <div class="mb-3"><label>Tiêu đề</label><input type="text" name="tieu_de" class="form-control" required>
             </div>
-        </div>
-    </nav>
-
-    <!-- Sửa sản phẩm -->
-    <div class="container my-5">
-        <h2 class="text-center">Sửa sản phẩm</h2>
-        <form method="POST" enctype="multipart/form-data" id="edit_product_form">
-            <div class="mb-3">
-                <label for="ten_san_pham" class="form-label">Tên sản phẩm</label>
-                <input type="text" class="form-control" id="ten_san_pham" name="ten_san_pham"
-                    value="<?= $product['ten_san_pham'] ?>" required>
+            <div class="mb-3"><label>Slug</label><input type="text" name="slug" class="form-control" required></div>
+            <div class="mb-3"><label>Nội dung mô tả</label><textarea name="noi_dung" class="form-control"
+                    required></textarea></div>
+            <div class="mb-3"><label>Ảnh đại diện</label><input type="text" name="thumbnail" class="form-control"
+                    required></div>
+            <div class="mb-3"><label>Loại bài viết</label>
+                <select name="loai_bai_viet" class="form-control" required>
+                    <?php foreach ($loai_bai_viet_list as $key => $value): ?>
+                    <option value="<?= $key ?>"><?= $value ?></option>
+                    <?php endforeach; ?>
+                </select>
             </div>
-            <div class="mb-3">
-                <label for="gia" class="form-label">Giá</label>
-                <input type="number" class="form-control" id="gia" name="gia" value="<?= $product['gia'] ?>" required>
+            <div class="mb-3"><label>Trạng thái hiển thị</label>
+                <select name="hien_thi" class="form-control" required>
+                    <option value="1">Hiển thị</option>
+                    <option value="0">Ẩn</option>
+                </select>
             </div>
-            <div class="mb-3">
-                <label for="so_luong" class="form-label">Số lượng</label>
-                <input type="number" class="form-control" id="so_luong" name="so_luong"
-                    value="<?= $product['so_luong'] ?>" required>
-            </div>
-            <div class="mb-3">
-                <label for="loai_id" class="form-label">Loại sản phẩm</label>
-                <input type="number" class="form-control" id="loai_id" name="loai_id" value="<?= $product['loai_id'] ?>"
-                    required>
-            </div>
-            <div class="mb-3">
-                <label for="mo_ta" class="form-label">Mô tả sản phẩm</label>
-                <textarea class="form-control" id="mo_ta" name="mo_ta" rows="4"
-                    required><?= $product['mo_ta'] ?></textarea>
+            <div class="mb-3"><label>Tác giả</label>
+                <select name="tac_gia_admin_id" class="form-control" required>
+                    <?php while ($admin = $admin_result->fetch_assoc()): ?>
+                    <option value="<?= $admin['id'] ?>"><?= $admin['ten_dang_nhap'] ?></option>
+                    <?php endwhile; ?>
+                </select>
             </div>
 
-            <!-- Hiển thị các hình ảnh hiện tại của sản phẩm và chỉnh sửa mô tả -->
-            <h5>Hình ảnh hiện tại</h5>
-            <div id="current-images">
-                <?php while ($image = $result_images->fetch_assoc()): ?>
-                <div class="image-group">
-                    <img src="<?= $image['ten_file'] ?>" width="100" height="100" class="m-1">
-                    <input type="text" class="form-control mt-2" name="mo_ta_hinh_old[<?= $image['id'] ?>]"
-                        value="<?= $image['mo_ta_ngan'] ?>" placeholder="Mô tả ngắn cho hình ảnh">
-                    <button type="button" class="btn btn-danger btn-sm mt-2"
-                        onclick="location.href='edit.php?id=<?= $id ?>&delete_image_id=<?= $image['id'] ?>'">Xóa
-                        ảnh</button>
-                </div>
-                <?php endwhile; ?>
+            <div class="mb-3" id="contentFields">
+                <label>Nội dung chi tiết</label>
+                <textarea name="doan_noi_dung[]" class="form-control mb-2" rows="4" required></textarea>
+                <input type="text" name="thu_tu_noi_dung[]" class="form-control mb-3" placeholder="Thứ tự hiển thị">
             </div>
+            <button type="button" class="btn btn-secondary mb-3" onclick="addField('content')">Thêm Nội Dung</button>
 
-            <!-- Nhóm hình ảnh mới -->
-            <div id="image-upload-section">
-                <div class="image-group">
-                    <label for="hinh_anh[]" class="form-label">Hình ảnh sản phẩm</label>
-                    <input type="file" class="form-control" name="hinh_anh[]" accept="image/*">
-                    <input type="text" class="form-control mt-2" name="mo_ta_hinh[]"
-                        placeholder="Mô tả ngắn cho hình ảnh">
-                </div>
+            <div class="mb-3" id="imageFields">
+                <label>Hình ảnh chi tiết</label>
+                <input type="file" name="hinh_anh[]" class="form-control mb-2">
+                <input type="text" name="thu_tu_hinh_anh[]" class="form-control mb-3" placeholder="Thứ tự hiển thị">
             </div>
+            <button type="button" class="btn btn-secondary mb-3" onclick="addField('image')">Thêm Hình Ảnh</button>
 
-            <!-- Thêm ảnh -->
-            <button type="button" class="btn btn-secondary" id="add-image-btn">Thêm ảnh</button>
-
-            <div class="text-center">
-                <button type="submit" class="btn btn-primary mt-3">Cập nhật sản phẩm</button>
-            </div>
+            <button type="submit" class="btn btn-primary">Thêm bài viết</button>
         </form>
     </div>
-
-    <!-- Bootstrap JS Bundle CDN (Popper + Bootstrap JS) -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-
-    <script>
-    // Thêm nhóm hình ảnh khi nhấn nút "Thêm ảnh"
-    document.getElementById('add-image-btn').addEventListener('click', function() {
-        const newImageGroup = document.createElement('div');
-        newImageGroup.classList.add('image-group');
-        newImageGroup.innerHTML = `
-                <label for="hinh_anh[]" class="form-label">Hình ảnh sản phẩm</label>
-                <input type="file" class="form-control" name="hinh_anh[]" accept="image/*">
-                <input type="text" class="form-control mt-2" name="mo_ta_hinh[]" placeholder="Mô tả ngắn cho hình ảnh">
-            `;
-        document.getElementById('image-upload-section').appendChild(newImageGroup);
-    });
-    </script>
 </body>
 
 </html>
